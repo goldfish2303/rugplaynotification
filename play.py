@@ -1,15 +1,15 @@
 import asyncio, json, requests, websockets
-TRADE_THRESHOLD = 50000.0
+
 WS = "wss://ws.rugplay.com"
-TOPIC = ""  # Replace with your ntfy topic (ntfy.sh)
+TOPIC = "PUT_YOUR_TOPIC_NAME_HERE_PLS"
 
 def format_dollars(amount):
     if amount >= 1_000_000:
-        return f"{amount / 1_000_000:.1f}M$"
+        return f"{amount / 1_000_000:.1f}M$" # round up number to millions
     elif amount >= 1_000:
-        return f"{amount / 1_000:.1f}K$"
+        return f"{amount / 1_000:.1f}K$" # round up number to thousands
     else:
-        return f"{amount:.0f}$"
+        return f"{amount:.0f}$" # skip rounding step if smaller than 1k
 
 def format_tokens(amount):
     if amount >= 1_000_000:
@@ -17,63 +17,93 @@ def format_tokens(amount):
     elif amount >= 1_000:
         return f"{amount / 1_000:.1f}K"
     else:
-        return f"{amount:.1f}"
+        return f"{amount:.1f}" # the same as format_dollars
 
-def notif(title, msg, tags="rugplay"):
+def notif(title, msg, priority="default", tags="rugplay"):
     try:
-        requests.post(
+        # Encode title and tags as UTF-8 bytes, so we dont get error for trying to send emojis
+        headers = {
+            "Title": title.encode('utf-8'),
+            "Tags": tags.encode('utf-8'),
+            "Priority": priority
+        }
+        response = requests.post(
             f"https://ntfy.sh/{TOPIC}",
-            data=msg.encode(),
-            headers={"Title": title.encode(), "Tags": tags}
+            data=msg.encode('utf-8'),
+            headers=headers
         )
-        print("notif sent:", title)
+        response.raise_for_status()
+        print(f"Notification sent ({priority}): {title}")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to send ntfy notification: {e}")
     except Exception as e:
-        print("err sending notif:", e)
+        print(f"Unexpected error: {e}")
 
 async def monitor():
-    print(f"watching trades over ${TRADE_THRESHOLD} lol")
+    print("Monitoring trades over $3k with priority tiers") # idk whats going on here cuz i vibecoded ts part
     while True:
         try:
             async with websockets.connect(WS, ping_interval=None, ping_timeout=None) as ws:
-                print("ws connected")
+                print("WebSocket connected")
                 await ws.send(json.dumps({"type": "set_coin", "coinSymbol": "@global"}))
-                async for m in ws:
+                async for message in ws:
                     try:
-                        d = json.loads(m)
-                        if d.get("type") == "ping":
+                        data = json.loads(message)
+                        if data.get("type") == "ping":
                             await ws.send(json.dumps({"type": "pong"}))
                             continue
-                        if d.get("type") != "all-trades":
+                        if data.get("type") != "all-trades":
                             continue
-                        t = d.get("data", {})
-                        val = float(t.get("totalValue", 0))
-                        if val < TRADE_THRESHOLD:
+                            
+                        trade = data.get("data", {})
+                        value = float(trade.get("totalValue", 0))
+                        
+                        # Skip trades below $3k
+                        if value < 3000:
                             continue
-                        kind = t.get("type", "")
-                        usr = t.get("username", "???")
-                        sym = t.get("coinSymbol", "???")
-                        amnt = float(t.get("amount", 0))
-                        cash = format_dollars(val)
-                        tokens = format_tokens(amnt)
+                        
+                        # Determine priority based on value tiers
+                        if value <= 7500:
+                            priority = "low"
+                        elif value <= 25000:
+                            priority = "default"
+                        elif value <= 60000:
+                            priority = "high"
+                        else:  # >60k
+                            priority = "urgent"
+                            
+                        kind = trade.get("type", "")
+                        username = trade.get("username", "???")
+                        symbol = trade.get("coinSymbol", "???")
+                        amount = float(trade.get("amount", 0))
+                        cash_str = format_dollars(value)
+                        tokens_str = format_tokens(amount)
 
-                        if kind == "BUY":
-                            ttl = f"🟩HUGE BUY: {sym}"
-                            body = f"{tokens} Tokens bought for {cash} by @{usr} https://rugplay.com/coin/{sym}"
-                        elif kind == "SELL":
-                            ttl = f"🟥HUGE SELL: {sym}"
-                            body = f"{tokens} Tokens sold for {cash} by @{usr} https://rugplay.com/coin/{sym}"
+                        # Determine title based on trade value
+                        if value < 20000:
+                            if kind == "BUY":
+                                title = f"🟩Small Buy: *{symbol}"
+                            elif kind == "SELL":
+                                title = f"🟥Small Sell: *{symbol}"
                         else:
-                            continue
+                            if kind == "BUY":
+                                title = f"🟩HUGE BUY: *{symbol}"
+                            elif kind == "SELL":
+                                title = f"🟥HUGE SELL: *{symbol}"
 
-                        notif(ttl, body)
-                    except:
+                        body = f"{'+' if kind == 'BUY' else '-'} {cash_str} for {tokens_str} Tokens by @{username} https://rugplay.com/coin/{symbol}"
+                        # + 830.0K$ for 34.5 Tokens by @daddy <coin link here>
+
+                        notif(title, body, priority)
+                    except Exception as e:
+                        print(f"Error processing trade: {e}")
                         continue
-        except:
-            print("RIP ws, retrying...")
+        except Exception as e:
+            print(f"WebSocket error: {e}, reconnecting...")
             await asyncio.sleep(10)
 
 if __name__ == "__main__":
     try:
         asyncio.run(monitor())
     except KeyboardInterrupt:
-        print("cya")
+        print("Monitoring stopped")
