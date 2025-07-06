@@ -1,7 +1,7 @@
 import asyncio, json, requests, websockets
 
 WS = "wss://ws.rugplay.com"
-TOPIC = "PUT_YOUR_TOPIC_NAME_HERE_PLS"
+TOPIC = "rugplaynotis"
 
 def format_dollars(amount):
     if amount >= 1_000_000:
@@ -18,6 +18,15 @@ def format_tokens(amount):
         return f"{amount / 1_000:.1f}K"
     else:
         return f"{amount:.1f}" # the same as format_dollars
+
+def format_price(price):
+    # Format price with appropriate decimal places
+    if price >= 1:
+        return f"${price:.2f}"
+    elif price >= 0.001:
+        return f"${price:.5f}".rstrip('0').rstrip('.')
+    else:
+        return f"${price:.6f}".rstrip('0').rstrip('.')
 
 def notif(title, msg, priority="default", tags="rugplay"):
     try:
@@ -40,7 +49,7 @@ def notif(title, msg, priority="default", tags="rugplay"):
         print(f"Unexpected error: {e}")
 
 async def monitor():
-    print("Monitoring trades over $3k with priority tiers") # idk whats going on here cuz i vibecoded ts part
+    print("Monitoring trades over $2.5k with priority tiers") # idk whats going on here cuz i vibecoded ts part
     while True:
         try:
             async with websockets.connect(WS, ping_interval=None, ping_timeout=None) as ws:
@@ -58,8 +67,8 @@ async def monitor():
                         trade = data.get("data", {})
                         value = float(trade.get("totalValue", 0))
                         
-                        # Skip trades below $3k
-                        if value < 3000:
+                        # Skip trades below $2.5k
+                        if value < 2500:
                             continue
                         
                         # Determine priority based on value tiers
@@ -78,21 +87,28 @@ async def monitor():
                         amount = float(trade.get("amount", 0))
                         cash_str = format_dollars(value)
                         tokens_str = format_tokens(amount)
+                        price = float(trade.get("price", 0))  # NEW: Get coin price
+                        price_str = format_price(price)  # NEW: Format price
 
                         # Determine title based on trade value
-                        if value < 20000:
+                        if value < 10000:
                             if kind == "BUY":
-                                title = f"🟩Small Buy: *{symbol}"
+                                title = f"🟩 *{symbol}/{price_str}"
                             elif kind == "SELL":
-                                title = f"🟥Small Sell: *{symbol}"
+                                title = f"🟥 *{symbol}/{price_str}"
+                        elif value < 27500:
+                            if kind == "BUY":
+                                title = f"🟩🟩 *{symbol}/{price_str}"
+                            elif kind == "SELL":
+                                title = f"🟥🟥 *{symbol}/{price_str}"
                         else:
                             if kind == "BUY":
-                                title = f"🟩HUGE BUY: *{symbol}"
+                                title = f"🟩🟩🟩 *{symbol}/{price_str}"
                             elif kind == "SELL":
-                                title = f"🟥HUGE SELL: *{symbol}"
+                                title = f"🟥🟥🟥 *{symbol}/{price_str}"
 
-                        body = f"{'+' if kind == 'BUY' else '-'} {cash_str} for {tokens_str} Tokens by @{username} https://rugplay.com/coin/{symbol}"
-                        # + 830.0K$ for 34.5 Tokens by @daddy <coin link here>
+                        body = f"{'+' if kind == 'BUY' else '-'}{cash_str} for {tokens_str} Tokens by @{username} https://rugplay.com/coin/{symbol} "
+                        # +830.0K$ for 34.5 Tokens by @daddy <coin link here>
 
                         notif(title, body, priority)
                     except Exception as e:
